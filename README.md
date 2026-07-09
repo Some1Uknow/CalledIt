@@ -1,130 +1,170 @@
 # CalledIt
 
-Backend and smart-contract first implementation for `CalledIt_TxLINE_CFE_SPEC.md`.
+CalledIt is a Telegram game for football score predictions.
 
-## Backend
+People in a group chat pick the final score of a match before kickoff. Their picks stay hidden at first. When the match starts, CalledIt can show a live leaderboard and then produce a final result when the match ends.
 
-The backend is a TypeScript/Hono service with SQLite persistence using Node's built-in `node:sqlite` module.
+This repo contains:
 
-Implemented:
+- a backend API
+- a small Telegram mini app frontend
+- an optional Solana receipt program for final result hashes
 
-- TxLINE fixture, snapshot, and historical replay adapters with opt-in demo fallback data.
-- SQLite schema for users, groups, fixtures, pools, predictions, score events, leaderboard snapshots, and receipts.
-- Telegram bot-only prediction flow with private inline score steppers.
-- Admin-gated pool creation/replay controls, prediction submission, hidden pre-lock leaderboard, snapshots, results, receipts, and SSE snapshot endpoint.
-- Telegram webhook command handling for `/start`, `/newpool`, `/leaderboard`, and `/result`.
-- Shared-rank leaderboard scoring from the spec.
+## How It Works
 
-Run locally:
+1. A group admin creates a pool for a match.
+2. CalledIt generates a private invite link for that pool.
+3. Players open the mini app from Telegram and lock in a score prediction.
+4. CalledIt fetches match data from TxLINE.
+5. The app shows standings and the final result.
+6. Optionally, the final result hash can be recorded on Solana.
+
+## What Is In This Repo
+
+### Backend
+
+The backend is a Node.js service built with Hono and SQLite.
+
+It handles:
+
+- Telegram authentication
+- admin pool creation
+- signed invite links for pools
+- prediction submission
+- leaderboard and result APIs
+- TxLINE score fetching
+- optional Solana receipt writing
+
+### Frontend
+
+The frontend is a small React + Vite app designed to open inside Telegram.
+
+It handles:
+
+- loading a pool from an invite link
+- authenticating the Telegram user
+- submitting a prediction
+- showing leaderboard, result, and receipt screens
+
+### Solana Program
+
+The Solana program stores a final receipt hash for a pool.
+
+It does not handle:
+
+- money
+- betting
+- custody
+- payouts
+
+It is only for recording a final result hash when that feature is enabled.
+
+## Run It Locally
+
+Requirements:
+
+- Node `>=26`
+- Rust and Cargo
+- Anchor tooling if you want to build the Solana program
+
+Install dependencies:
 
 ```sh
 npm install
+```
+
+Create local env:
+
+```sh
 cp backend/.env.example backend/.env
+```
+
+Run the backend:
+
+```sh
 npm run dev
 ```
 
-Run the Telegram mini app locally:
+Run the frontend:
 
 ```sh
 npm run dev:frontend
 ```
 
-Public deployments must set:
+## Important Environment Variables
+
+The backend reads its settings from env vars.
+
+Core production values:
 
 ```sh
 NODE_ENV=production
-PUBLIC_MINI_APP_URL=https://your-mini-app.example
-CORS_ORIGINS=https://your-mini-app.example
-SESSION_SECRET=<32+ byte random secret>
-ADMIN_API_KEY=<32+ byte random admin key>
-POOL_INVITE_SECRET=<32+ byte random invite signing secret>
+PUBLIC_MINI_APP_URL=https://your-frontend.example
+CORS_ORIGINS=https://your-frontend.example
+SESSION_SECRET=<32+ byte secret>
+ADMIN_API_KEY=<32+ byte secret>
+POOL_INVITE_SECRET=<32+ byte secret>
 TELEGRAM_BOT_TOKEN=<telegram bot token>
 TELEGRAM_WEBHOOK_SECRET=<telegram webhook secret>
 TELEGRAM_INIT_MAX_AGE_SECONDS=600
-TXLINE_AUTH_JWT=<guest JWT from TxLINE>
-TXLINE_API_TOKEN=<activated TxLINE API token>
+TXLINE_AUTH_JWT=<txline jwt>
+TXLINE_API_TOKEN=<txline api token>
 DEMO_MODE=false
 RECEIPT_CHAIN_ENABLED=false
 ```
 
-Admin HTTP routes require:
-
-```txt
-x-admin-api-key: <ADMIN_API_KEY>
-```
-
-User-facing pool routes require both a Telegram session and the signed invite token from the mini-app URL:
-
-```txt
-Authorization: Bearer <sessionToken>
-x-pool-invite: <inviteToken>
-```
-
-Useful checks:
-
-```sh
-npm run typecheck
-npm test
-npm run demo --workspace backend
-```
-
-## External E2E Env
-
-A blank local template is available at `backend/.env.external.local`. It is ignored by git.
-
-For TxLINE, use one network consistently:
-
-- Devnet API base: `https://txline-dev.txodds.com/api/`
-- Mainnet API base: `https://txline.txodds.com/api/`
-
-TxLINE data requests require both credentials:
-
-- `TXLINE_AUTH_JWT`: guest JWT from `POST /auth/guest/start`
-- `TXLINE_API_TOKEN`: activated API token from `POST /api/token/activate`
-
-The backend uses these documented data endpoints:
-
-- `GET /api/fixtures/snapshot`
-- `GET /api/scores/snapshot/{fixtureId}`
-- `GET /api/scores/historical/{fixtureId}`
-- `GET /api/scores/stream`
-
-## Public Launch Checklist
-
-- Confirm `git status` does not include any `.env*` file.
-- Keep `backend/.env.local` local-only; it is ignored by `.gitignore`.
-- Rotate any token that has been copied into shared logs, screenshots, or deployment consoles.
-- Set `NODE_ENV=production` and confirm startup rejects missing production secrets.
-- Set `PUBLIC_MINI_APP_URL` to the deployed frontend origin and `CORS_ORIGINS` to the same origin.
-- Configure the Telegram bot mini-app URL to `PUBLIC_MINI_APP_URL`.
-- Use admin `POST /api/pools/:poolId/snapshot` for TxLINE-backed score writes; `GET /snapshot` is read-only.
-
-## Smart Contract
-
-The Anchor program in `programs/calledit_receipts` records a final receipt hash PDA for a pool. It intentionally does not implement escrow, deposits, payouts, or betting mechanics.
-
-Implemented instruction:
-
-- `initialize_config(authority)`
-- `update_authority(new_authority)`
-- `record_receipt(pool_id, txline_fixture_id, final_home_goals, final_away_goals, receipt_hash)`
-
-`record_receipt` requires the signer to match the configured authority. For backend chain recording, set:
+Optional Solana receipt values:
 
 ```sh
 RECEIPT_CHAIN_ENABLED=true
 SOLANA_RPC_URL=<rpc url>
 SOLANA_RECEIPT_PROGRAM_ID=<program id>
-SOLANA_RECEIPT_KEYPAIR_PATH=<path to backend authority keypair>
+SOLANA_RECEIPT_KEYPAIR_PATH=<path to authority keypair>
 ```
 
-Verify:
+## Useful Commands
+
+Run checks:
 
 ```sh
+npm run typecheck
+npm test
+npm run build
 cargo test --manifest-path programs/calledit_receipts/Cargo.toml
-anchor build
+npm audit
 ```
+
+## Security Model
+
+- Pool links are signed with `POOL_INVITE_SECRET`.
+- User-facing pool APIs require both:
+  - a Telegram-backed session token
+  - a valid pool invite token
+- Admin-only routes require `x-admin-api-key`.
+- Demo mode is blocked in production.
+- The app fails closed in production if required secrets are missing.
+
+## Public Beta Checklist
+
+Before opening this to real users:
+
+- deploy backend on Node `>=26`
+- deploy frontend to a real public domain
+- set `PUBLIC_MINI_APP_URL` and `CORS_ORIGINS` to that frontend domain
+- configure the Telegram mini app URL
+- configure the Telegram webhook to `/api/telegram/webhook`
+- add real TxLINE credentials
+- keep `backend/.env.local` out of Git
+- keep `DEMO_MODE=false`
+
+If Solana receipts are enabled:
+
+- deploy the updated Anchor program
+- initialize the receipt config authority
+- make the backend signer match that authority
 
 ## Notes
 
-TxLINE credentials stay server-side. Demo fixtures and replay events are only used when `DEMO_MODE=true`; production fails closed with upstream errors instead of silently showing stale demo data.
+- `backend/.env.local` is for local use only and should never be committed.
+- `backend/.env.example` is the safe template file to keep in Git.
+- The project currently assumes TxLINE as the live match data source.
