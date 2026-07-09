@@ -1,0 +1,30 @@
+{
+  "name": "calledit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CalledIt backend and Solana receipt program",
+  "engines": {
+    "node": ">=26.0.0"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace backend",
+    "dev:frontend": "npm run dev --workspace frontend",
+    "build": "npm run build --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "npm run test --workspace backend",
+    "txline:guest": "node scripts/txline-devnet-guest.mjs",
+    "txline:activate-devnet": "node scripts/txline-activate-devnet.mjs"
+  },
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "overrides": {
+    "uuid": "11.1.1"
+  },
+  "devDependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/web3.js": "^1.98.4",
+    "tweetnacl": "^1.0.3"
+  }
+}
