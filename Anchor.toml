@@ -6,7 +6,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-calledit_receipts = "Ca11ed1111111111111111111111111111111111111"
+calledit_receipts = "2Yr85XfdHiYHyjxWFkVJzPiL9xfKYx3w3vGw4eqcwMMM"
+
+[programs.devnet]
+calledit_receipts = "2Yr85XfdHiYHyjxWFkVJzPiL9xfKYx3w3vGw4eqcwMMM"
 
 [registry]
 url = "https://api.apr.dev"

@@ -2,22 +2,24 @@
   "name": "calledit",
   "version": "0.1.0",
   "private": true,
-  "description": "CalledIt backend and Solana receipt program",
+  "description": "CalledIt Telegram prediction bot backend",
   "engines": {
     "node": ">=26.0.0"
   },
   "scripts": {
     "dev": "npm run dev --workspace backend",
-    "dev:frontend": "npm run dev --workspace frontend",
     "build": "npm run build --workspaces",
     "typecheck": "npm run typecheck --workspaces",
     "test": "npm run test --workspace backend",
-    "txline:guest": "node scripts/txline-devnet-guest.mjs",
-    "txline:activate-devnet": "node scripts/txline-activate-devnet.mjs"
+    "backup": "node scripts/backup-sqlite.mjs",
+    "restore": "node scripts/restore-sqlite.mjs",
+    "txline:activate-devnet": "node scripts/txline-activate-devnet.mjs",
+    "market:initialize-devnet": "npm run build --workspace backend && node backend/dist/market/initialize.js",
+    "market:smoke-devnet": "npm run build --workspace backend && node backend/dist/market/devnetSmoke.js",
+    "market:smoke-txline-cpi-devnet": "npm run build --workspace backend && node backend/dist/market/txlineCpiSmoke.js"
   },
   "workspaces": [
-    "backend",
-    "frontend"
+    "backend"
   ],
   "overrides": {
     "uuid": "11.1.1"

@@ -2,16 +2,12 @@
 node_modules/
 dist/
 backend/dist/
-frontend/dist/
 .env
 .env.*
 backend/.env
 backend/.env.*
-frontend/.env
-frontend/.env.*
 !.env.example
 !backend/.env.example
-!frontend/.env.example
 *.db
 *.db-shm
 *.db-wal
