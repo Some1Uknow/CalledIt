@@ -22,6 +22,8 @@ export type Prediction = {
   submittedAt: string;
   finalDistance: number | null;
   rank: number | null;
+  walletAddress?: string | null;
+  marketEntryAddress?: string | null;
 };
 
 export type ScoreState = {
