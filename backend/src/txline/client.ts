@@ -5,12 +5,16 @@ export type NormalizedFixture = {
   competition: string;
   homeTeam: string;
   awayTeam: string;
+  participant1IsHome: boolean;
   kickoffAt: string | null;
   status: string;
   raw: unknown;
 };
 
 export type NormalizedScoreEvent = {
+  eventId: string | null;
+  seq: string | null;
+  fixtureId: string | null;
   eventType: string;
   matchStatus: string | null;
   homeGoals: number;
@@ -33,6 +37,7 @@ const demoFixtures: NormalizedFixture[] = [
     competition: "World Cup",
     homeTeam: "Argentina",
     awayTeam: "France",
+    participant1IsHome: true,
     kickoffAt: "2022-12-18T15:00:00.000Z",
     status: "replayable",
     raw: { source: "demo", fixture: "Argentina vs France" }
@@ -42,6 +47,7 @@ const demoFixtures: NormalizedFixture[] = [
     competition: "World Cup",
     homeTeam: "England",
     awayTeam: "USA",
+    participant1IsHome: true,
     kickoffAt: new Date(Date.now() + 86_400_000).toISOString(),
     status: "scheduled",
     raw: { source: "demo", fixture: "England vs USA" }
@@ -60,6 +66,8 @@ const demoReplay: NormalizedScoreEvent[] = [
   event("full_time", "full_time", 3, 3, "120+3'")
 ];
 
+let runtimeAuthJwt = config.TXLINE_AUTH_JWT ?? config.TXLINE_GUEST_TOKEN;
+
 function event(
   eventType: string,
   matchStatus: string,
@@ -68,6 +76,9 @@ function event(
   matchClock: string
 ): NormalizedScoreEvent {
   return {
+    eventId: null,
+    seq: null,
+    fixtureId: null,
     eventType,
     matchStatus,
     homeGoals,
@@ -80,13 +91,17 @@ function event(
 
 async function txlineFetch<T>(path: string): Promise<T | null> {
   const url = new URL(path.replace(/^\//, ""), config.TXLINE_BASE_URL);
-  const headers: Record<string, string> = { accept: "application/json" };
-  const authJwt = config.TXLINE_AUTH_JWT ?? config.TXLINE_GUEST_TOKEN;
-  if (authJwt) headers.authorization = `Bearer ${authJwt}`;
-  if (config.TXLINE_API_TOKEN) headers["x-api-token"] = config.TXLINE_API_TOKEN;
-
   try {
-    const response = await fetch(url, { headers });
+    let response = await fetch(url, {
+      headers: txlineHeaders("application/json"),
+      signal: AbortSignal.timeout(10_000)
+    });
+    if (response.status === 401 && (await renewRuntimeJwt())) {
+      response = await fetch(url, {
+        headers: txlineHeaders("application/json"),
+        signal: AbortSignal.timeout(10_000)
+      });
+    }
     if (!response.ok) return null;
     return (await response.json()) as T;
   } catch {
@@ -110,9 +125,16 @@ export class TxlineClient {
       normalized.length > 0
         ? (normalized as NormalizedFixture[])
         : demoOrThrow(demoFixtures, `TxLINE ${kind} fixtures are unavailable`);
+    const now = Date.now();
     return fixtures
       .filter((fixture) => fixture.competition.toLowerCase().includes("world cup"))
-      .filter((fixture) => (kind === "upcoming" ? fixture.status !== "finished" : true))
+      .filter((fixture) => {
+        const kickoff = fixture.kickoffAt ? Date.parse(fixture.kickoffAt) : Number.NaN;
+        if (!Number.isFinite(kickoff)) return false;
+        if (kind === "upcoming") return fixture.status === "scheduled" && kickoff > now;
+        return kickoff <= now - 6 * 60 * 60 * 1000 && kickoff >= now - 14 * 24 * 60 * 60 * 1000;
+      })
+      .sort((a, b) => Date.parse(a.kickoffAt!) - Date.parse(b.kickoffAt!))
       .slice(0, 5);
   }
 
@@ -133,6 +155,54 @@ export class TxlineClient {
       ? (events as NormalizedScoreEvent[])
       : demoOrThrow(demoReplay, "TxLINE historical events are unavailable");
   }
+
+  async scoreStatValidation(txlineFixtureId: string, seq: string): Promise<unknown> {
+    if (!/^\d+$/.test(txlineFixtureId) || !/^\d+$/.test(seq) || Number(seq) < 1) {
+      throw new TxlineUnavailableError("TxLINE validation requires a numeric fixture ID and a real score sequence");
+    }
+    const query = new URLSearchParams({ fixtureId: txlineFixtureId, seq, statKeys: "1,2" });
+    const data = await txlineFetch<unknown>(`/scores/stat-validation?${query}`);
+    if (!data) throw new TxlineUnavailableError("TxLINE score validation is unavailable");
+    return data;
+  }
+
+  async openScoreStream(signal: AbortSignal, lastEventId?: string | null) {
+    const url = new URL("scores/stream", config.TXLINE_BASE_URL);
+    let response = await fetch(url, { headers: txlineHeaders("text/event-stream", lastEventId), signal });
+    if (response.status === 401 && (await renewRuntimeJwt(signal))) {
+      response = await fetch(url, { headers: txlineHeaders("text/event-stream", lastEventId), signal });
+    }
+    if (!response.ok || !response.body) throw new TxlineUnavailableError(`TxLINE score stream failed (${response.status})`);
+    return response;
+  }
+}
+
+function txlineHeaders(accept: string, lastEventId?: string | null) {
+  const headers: Record<string, string> = { accept };
+  if (accept === "text/event-stream") headers["cache-control"] = "no-cache";
+  if (runtimeAuthJwt) headers.authorization = `Bearer ${runtimeAuthJwt}`;
+  if (config.TXLINE_API_TOKEN) headers["x-api-token"] = config.TXLINE_API_TOKEN;
+  if (lastEventId) headers["last-event-id"] = lastEventId;
+  return headers;
+}
+
+async function renewRuntimeJwt(parentSignal?: AbortSignal) {
+  try {
+    const timeout = AbortSignal.timeout(10_000);
+    const signal = parentSignal ? AbortSignal.any([parentSignal, timeout]) : timeout;
+    const response = await fetch(new URL("/auth/guest/start", config.TXLINE_BASE_URL), {
+      method: "POST",
+      headers: { accept: "application/json" },
+      signal
+    });
+    if (!response.ok) return false;
+    const body = (await response.json()) as { token?: unknown };
+    if (typeof body.token !== "string" || body.token.length === 0) return false;
+    runtimeAuthJwt = body.token;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function normalizeFixture(raw: unknown): NormalizedFixture | null {
@@ -141,22 +211,24 @@ function normalizeFixture(raw: unknown): NormalizedFixture | null {
   const id = pickString(record, ["FixtureId", "id", "fixtureId", "fixture_id", "txlineFixtureId"]);
   const participant1 = pickString(record, ["Participant1", "participant1", "homeTeam", "home_team", "home", "teamHome"]);
   const participant2 = pickString(record, ["Participant2", "participant2", "awayTeam", "away_team", "away", "teamAway"]);
-  if (!id || !participant1 || !participant2) return null;
+  const competition = pickString(record, ["Competition", "competition", "league", "tournament"]);
+  if (!id || !participant1 || !participant2 || !competition) return null;
   const participant1IsHome = pickBoolean(record, ["Participant1IsHome", "participant1IsHome"]);
   const home = participant1IsHome === false ? participant2 : participant1;
   const away = participant1IsHome === false ? participant1 : participant2;
   return {
     txlineFixtureId: id,
-    competition: pickString(record, ["Competition", "competition", "league", "tournament"]) ?? "World Cup",
+    competition,
     homeTeam: home,
     awayTeam: away,
+    participant1IsHome: participant1IsHome !== false,
     kickoffAt: normalizeTimestamp(pickString(record, ["StartTime", "kickoffAt", "kickoff_at", "startTime", "start_time"])),
-    status: pickString(record, ["status", "matchStatus", "state"]) ?? "scheduled",
+    status: normalizeFixtureStatus(record),
     raw
   };
 }
 
-function normalizeScoreEvent(raw: unknown): NormalizedScoreEvent | null {
+export function normalizeScoreEvent(raw: unknown): NormalizedScoreEvent | null {
   if (!raw || typeof raw !== "object") return null;
   const record = raw as Record<string, unknown>;
   const participant1Goals =
@@ -176,17 +248,45 @@ function normalizeScoreEvent(raw: unknown): NormalizedScoreEvent | null {
     (participant1IsHome === false ? participant1Goals : participant2Goals);
   if (homeGoals === null || awayGoals === null) return null;
   return {
+    eventId: pickString(record, ["id", "Id", "eventId", "event_id"]),
+    seq: pickString(record, ["seq", "Seq", "sequence"]),
+    fixtureId: pickString(record, ["fixtureId", "FixtureId", "fixture_id"]),
     eventType: pickString(record, ["action", "Action", "eventType", "event_type", "type"]) ?? "snapshot",
     matchStatus:
       pickStatus(record, "statusSoccerId") ??
       pickStatus(record, "statusId") ??
-      pickString(record, ["gameState", "matchStatus", "match_status", "status"]),
+      pickString(record, ["gameState", "matchStatus", "match_status", "status", "statusId", "StatusId"]),
     homeGoals,
     awayGoals,
     matchClock: normalizeClock(record),
     txlineTimestamp: normalizeTimestamp(pickString(record, ["ts", "Ts", "timestamp", "txlineTimestamp", "txline_timestamp"])),
     raw
   };
+}
+
+function normalizeFixtureStatus(record: Record<string, unknown>) {
+  const raw = record.GameState ?? record.gameState ?? record.status ?? record.matchStatus ?? record.state;
+  if (raw === 1 || raw === "1") return "scheduled";
+  if (raw === 6 || raw === "6") return "cancelled";
+  const status = typeof raw === "string" ? raw.toLowerCase() : "scheduled";
+  if (["scheduled", "not_started", "ns"].includes(status)) return "scheduled";
+  if (["cancelled", "canceled"].includes(status)) return "cancelled";
+  if (["finished", "full_time", "end"].includes(status)) return "finished";
+  return status;
+}
+
+export function isTerminalScoreEvent(event: NormalizedScoreEvent) {
+  const status = event.matchStatus?.toUpperCase() ?? "";
+  return ["END", "F2", "FET", "FPE", "WET", "WPE", "FT", "FULL_TIME", "FINISHED", "100"].includes(status) || isFinalisedScoreEvent(event);
+}
+
+/** TxLINE documents this exact final record shape for settlement proofs. */
+export function isFinalisedScoreEvent(event: NormalizedScoreEvent) {
+  if (event.eventType.toLowerCase() !== "game_finalised") return false;
+  const raw = event.raw && typeof event.raw === "object" ? (event.raw as Record<string, unknown>) : {};
+  const statusId = pickNumber(raw, ["statusId", "StatusId"]);
+  const period = pickNumber(raw, ["period", "Period"]);
+  return statusId === 100 && period === 100;
 }
 
 function pickScoreTotal(record: Record<string, unknown>, scoreKey: string, participantKey: string) {
