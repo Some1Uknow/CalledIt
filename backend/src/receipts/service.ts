@@ -20,25 +20,6 @@ export async function resolvePool(input: {
   const ranked = rankPredictions(listPredictions(input.pool.id), input.finalHomeGoals, input.finalAwayGoals);
   const winningDistance = ranked[0]?.distance ?? null;
   const now = nowIso();
-
-  const updatePrediction = db.prepare("UPDATE predictions SET final_distance = ?, rank = ?, updated_at = ? WHERE id = ?");
-  db.exec("BEGIN");
-  try {
-    for (const prediction of ranked) {
-      updatePrediction.run(prediction.distance, prediction.rank, now, prediction.id);
-    }
-    setPoolStatus(input.pool.id, "resolved", {
-      resolvedAt: now,
-      finalHomeGoals: input.finalHomeGoals,
-      finalAwayGoals: input.finalAwayGoals,
-      winningDistance
-    });
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-
   const receiptPayload = {
     fixture: `${input.pool.fixture.homeTeam} vs ${input.pool.fixture.awayTeam}`,
     txlineFixtureId: input.pool.fixture.txlineFixtureId,
@@ -50,7 +31,8 @@ export async function resolvePool(input: {
   };
   const hash = receiptHash(receiptPayload);
 
-  db.prepare(
+  const updatePrediction = db.prepare("UPDATE predictions SET final_distance = ?, rank = ?, updated_at = ? WHERE id = ?");
+  const upsertReceipt = db.prepare(
     `INSERT INTO receipts (
       id, pool_id, txline_fixture_id, final_home_goals, final_away_goals, source,
       proof_json, raw_txline_json, receipt_hash, created_at
@@ -63,18 +45,35 @@ export async function resolvePool(input: {
       raw_txline_json = excluded.raw_txline_json,
       receipt_hash = excluded.receipt_hash,
       created_at = excluded.created_at`
-  ).run(
-    randomUUID(),
-    input.pool.id,
-    input.pool.fixture.txlineFixtureId,
-    input.finalHomeGoals,
-    input.finalAwayGoals,
-    input.source,
-    input.proofJson === undefined ? null : json(input.proofJson),
-    input.rawTxlineJson === undefined ? null : json(input.rawTxlineJson),
-    hash,
-    now
   );
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const prediction of ranked) {
+      updatePrediction.run(prediction.distance, prediction.rank, now, prediction.id);
+    }
+    setPoolStatus(input.pool.id, "resolved", {
+      resolvedAt: now,
+      finalHomeGoals: input.finalHomeGoals,
+      finalAwayGoals: input.finalAwayGoals,
+      winningDistance
+    });
+    upsertReceipt.run(
+      randomUUID(),
+      input.pool.id,
+      input.pool.fixture.txlineFixtureId,
+      input.finalHomeGoals,
+      input.finalAwayGoals,
+      input.source,
+      input.proofJson === undefined ? null : json(input.proofJson),
+      input.rawTxlineJson === undefined ? null : json(input.rawTxlineJson),
+      hash,
+      now
+    );
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 
   const chainReceipt = await recordReceiptOnChain({
     poolId: input.pool.id,
