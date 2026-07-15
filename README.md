@@ -1,170 +1,129 @@
 # CalledIt
 
-CalledIt is a Telegram game for football score predictions.
+CalledIt is a Telegram bot for live football score predictions. In the devnet market mode, a group admin creates a fixed-stake exact-score pool, players fund their entry from their own Solana wallet, and TxLINE settles the final score using an on-chain Merkle proof.
 
-People in a group chat pick the final score of a match before kickoff. Their picks stay hidden at first. When the match starts, CalledIt can show a live leaderboard and then produce a final result when the match ends.
+## Beta flow
 
-This repo contains:
+1. Add the bot to a Telegram group and grant it permission to read membership and edit its messages.
+2. A group admin runs `/newpool` and chooses an upcoming World Cup fixture.
+3. Members follow the private prediction link, choose one exact score, and fund their devnet SOL entry before kickoff.
+4. The on-chain program locks entries automatically at kickoff.
+5. The bot edits the group leaderboard as TxLINE devnet score events arrive.
+6. TxLINE validates the final full-game score on-chain. Exact-score winners claim the pot; no exact winner or an emergency cancellation enables individual refunds.
 
-- a backend API
-- a small Telegram mini app frontend
-- an optional Solana receipt program for final result hashes
+There is no Telegram Mini App and CalledIt never receives a player private key. The hosted wallet page only prepares a fixed program transaction for the connected wallet to review and sign. This deployment is devnet-only: devnet SOL has no real-world value. Mainnet is deliberately out of scope pending a separate audit, legal review, and multisig authority setup.
 
-## How It Works
+## Public HTTP surface
 
-1. A group admin creates a pool for a match.
-2. CalledIt generates a private invite link for that pool.
-3. Players open the mini app from Telegram and lock in a score prediction.
-4. CalledIt fetches match data from TxLINE.
-5. The app shows standings and the final result.
-6. Optionally, the final result hash can be recorded on Solana.
+- `GET /health` — process liveness
+- `GET /ready` — SQLite and TxLINE supervisor status
+- `POST /api/telegram/webhook` — Telegram updates authenticated by `TELEGRAM_WEBHOOK_SECRET`
+- `GET /stake/:token` and `GET /claim/:poolId` — one-purpose wallet pages, enabled only when `MARKET_ENABLED=true`
+- `POST /api/market/*` — bearer-link-scoped transaction preparation and confirmation endpoints, enabled only when `MARKET_ENABLED=true`
 
-## What Is In This Repo
+No HTTP admin endpoints are mounted in production.
 
-### Backend
+## Requirements
 
-The backend is a Node.js service built with Hono and SQLite.
+- Node.js 26 or newer
+- A Telegram bot token and webhook secret
+- TxLINE devnet guest JWT and API token from the same devnet subscription
+- One persistent filesystem volume for SQLite
+- A deployed CalledIt escrow program on Solana devnet and a backend-only devnet authority key
 
-It handles:
+## Configuration
 
-- Telegram authentication
-- admin pool creation
-- signed invite links for pools
-- prediction submission
-- leaderboard and result APIs
-- TxLINE score fetching
-- optional Solana receipt writing
+Copy `backend/.env.example` to `backend/.env.local` for local development. A public deployment must still use `NODE_ENV=production`, even though TxLINE runs on devnet.
 
-### Frontend
-
-The frontend is a small React + Vite app designed to open inside Telegram.
-
-It handles:
-
-- loading a pool from an invite link
-- authenticating the Telegram user
-- submitting a prediction
-- showing leaderboard, result, and receipt screens
-
-### Solana Program
-
-The Solana program stores a final receipt hash for a pool.
-
-It does not handle:
-
-- money
-- betting
-- custody
-- payouts
-
-It is only for recording a final result hash when that feature is enabled.
-
-## Run It Locally
-
-Requirements:
-
-- Node `>=26`
-- Rust and Cargo
-- Anchor tooling if you want to build the Solana program
-
-Install dependencies:
-
-```sh
-npm install
-```
-
-Create local env:
-
-```sh
-cp backend/.env.example backend/.env
-```
-
-Run the backend:
-
-```sh
-npm run dev
-```
-
-Run the frontend:
-
-```sh
-npm run dev:frontend
-```
-
-## Important Environment Variables
-
-The backend reads its settings from env vars.
-
-Core production values:
+Required production values:
 
 ```sh
 NODE_ENV=production
-PUBLIC_MINI_APP_URL=https://your-frontend.example
-CORS_ORIGINS=https://your-frontend.example
-SESSION_SECRET=<32+ byte secret>
-ADMIN_API_KEY=<32+ byte secret>
-POOL_INVITE_SECRET=<32+ byte secret>
-TELEGRAM_BOT_TOKEN=<telegram bot token>
-TELEGRAM_WEBHOOK_SECRET=<telegram webhook secret>
-TELEGRAM_INIT_MAX_AGE_SECONDS=600
-TXLINE_AUTH_JWT=<txline jwt>
-TXLINE_API_TOKEN=<txline api token>
+PORT=8787
+DATABASE_PATH=/data/calledit.db
 DEMO_MODE=false
+TELEGRAM_BOT_TOKEN=<bot token>
+TELEGRAM_BOT_USERNAME=<bot username without @>
+TELEGRAM_WEBHOOK_SECRET=<random 32+ byte secret>
+TXLINE_NETWORK=devnet
+TXLINE_BASE_URL=https://txline-dev.txodds.com/api/
+TXLINE_SERVICE_LEVEL=1
+TXLINE_AUTH_JWT=<devnet guest JWT>
+TXLINE_API_TOKEN=<devnet API token>
 RECEIPT_CHAIN_ENABLED=false
+MARKET_ENABLED=true
+PUBLIC_BASE_URL=https://<public-backend>
+SOLANA_RPC_URL=https://api.devnet.solana.com
+SOLANA_MARKET_PROGRAM_ID=2Yr85XfdHiYHyjxWFkVJzPiL9xfKYx3w3vGw4eqcwMMM
+SOLANA_MARKET_AUTHORITY_SECRET=<JSON keypair secret stored only in Railway>
+SOLANA_MARKET_EMERGENCY_AUTHORITY=<emergency public key>
+MARKET_STAKE_LAMPORTS=10000000
+MARKET_MAX_ENTRIES=100
+MARKET_INTENT_TTL_SECONDS=900
 ```
 
-Optional Solana receipt values:
+The TxLINE guest JWT may expire while the service is running; CalledIt renews it on a rejected API/SSE request. Production validation therefore requires an initial JWT and API token but does not require a long remaining JWT lifetime.
+
+## Commands
 
 ```sh
-RECEIPT_CHAIN_ENABLED=true
-SOLANA_RPC_URL=<rpc url>
-SOLANA_RECEIPT_PROGRAM_ID=<program id>
-SOLANA_RECEIPT_KEYPAIR_PATH=<path to authority keypair>
-```
-
-## Useful Commands
-
-Run checks:
-
-```sh
+npm install
+npm run dev
 npm run typecheck
 npm test
 npm run build
 cargo test --manifest-path programs/calledit_receipts/Cargo.toml
 npm audit
+cargo audit
 ```
 
-## Security Model
+## Telegram setup
 
-- Pool links are signed with `POOL_INVITE_SECRET`.
-- User-facing pool APIs require both:
-  - a Telegram-backed session token
-  - a valid pool invite token
-- Admin-only routes require `x-admin-api-key`.
-- Demo mode is blocked in production.
-- The app fails closed in production if required secrets are missing.
+Configure Telegram to send updates to:
 
-## Public Beta Checklist
+```txt
+https://<public-backend>/api/telegram/webhook
+```
 
-Before opening this to real users:
+Set the same random secret in Telegram's `secret_token` webhook option and `TELEGRAM_WEBHOOK_SECRET`. The bot must be able to call `getChatMember`, send messages, and edit its own messages.
 
-- deploy backend on Node `>=26`
-- deploy frontend to a real public domain
-- set `PUBLIC_MINI_APP_URL` and `CORS_ORIGINS` to that frontend domain
-- configure the Telegram mini app URL
-- configure the Telegram webhook to `/api/telegram/webhook`
-- add real TxLINE credentials
-- keep `backend/.env.local` out of Git
-- keep `DEMO_MODE=false`
+## Storage and operations
 
-If Solana receipts are enabled:
+Run exactly one backend instance for the SQLite beta. Mount `DATABASE_PATH` on persistent storage, create encrypted hourly backups with seven-day retention, and test restoration before launch. `/ready` reports database readiness and whether the TxLINE stream is connected; a disconnected stream is degraded state rather than process failure.
 
-- deploy the updated Anchor program
-- initialize the receipt config authority
-- make the backend signer match that authority
+The included container uses `/data/calledit.db` on the `calledit-data` volume. Generate a base64-encoded 32-byte backup key in your secret manager, then schedule:
 
-## Notes
+```sh
+DATABASE_PATH=/data/calledit.db BACKUP_DIR=/backups BACKUP_ENCRYPTION_KEY=<secret> npm run backup
+DATABASE_PATH=/tmp/calledit-restore-test.db BACKUP_ENCRYPTION_KEY=<secret> npm run restore -- /backups/<backup>.db.enc
+```
 
-- `backend/.env.local` is for local use only and should never be committed.
-- `backend/.env.example` is the safe template file to keep in Git.
-- The project currently assumes TxLINE as the live match data source.
+The backup command takes a consistent SQLite snapshot, encrypts it with AES-256-GCM, writes it atomically, and removes backups older than `BACKUP_RETENTION_DAYS` (seven by default). The restore command refuses to overwrite a database and runs SQLite integrity validation before publishing the restored file.
+
+For the included Compose definition, export only the required values or pass an environment file explicitly:
+
+```sh
+docker compose --env-file backend/.env.local up --build
+```
+
+Compose allowlists the bot and TxLINE settings instead of copying every local variable into the container.
+
+## Security notes
+
+- Join codes are random, stored only as hashes, expire at kickoff, and are accepted only from members of the originating Telegram group.
+- Telegram updates are size-limited, schema-validated, authenticated, and deduplicated by `update_id`.
+- On-chain entries enforce the fixed stake, one entry per wallet, canonical PDAs, and kickoff lock. Program-owned PDA vaults can pay only a winner or the originating entrant in refund mode; there is no operator withdrawal instruction.
+- Final market scores require TxLINE's `validate_stat_v2` Merkle proof for exact participant 1/2 full-game goal leaves. The backend also accepts only TxLINE's documented `game_finalised` record before relaying the proof.
+- Predictions enforce kickoff inside an immediate SQLite transaction for the non-market path.
+- TxLINE and Telegram credentials remain server-side and must never be committed.
+- `backend/.env.local` is ignored by Git.
+
+## Beta launch checklist
+
+- Keep `MARKET_ENABLED=false` until the program ID, devnet authority secret, public URL, and emergency authority are all configured.
+- Verify the devnet program configuration and run `npm run market:smoke-devnet` plus `npm run market:smoke-txline-cpi-devnet` before first use.
+- Rotate the Telegram bot token, webhook secret, TxLINE guest JWT, and TxLINE API token used during development.
+- Deploy exactly one backend instance with a persistent `/data` volume.
+- Register the production HTTPS webhook with Telegram's `secret_token` set.
+- Run one encrypted backup and restore drill against the deployed volume.
+- Confirm `/health` is healthy and `/ready` can observe the TxLINE stream during a covered fixture window.
