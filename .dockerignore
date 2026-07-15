@@ -1,0 +1,14 @@
+.git
+.env
+.env.*
+backend/.env
+backend/.env.*
+node_modules
+backend/node_modules
+backend/dist
+target
+*.db
+*.db-shm
+*.db-wal
+backups
+npm-debug.log*

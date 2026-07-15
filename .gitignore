@@ -17,3 +17,4 @@ backend/.env.*
 target/
 .anchor/
 test-ledger/
+.superstack/
