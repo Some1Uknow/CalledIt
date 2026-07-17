@@ -13,6 +13,24 @@ CalledIt is a Telegram bot for live football score predictions. In the devnet ma
 
 There is no Telegram Mini App and CalledIt never receives a player private key. The hosted wallet page only prepares a fixed program transaction for the connected wallet to review and sign. This deployment is devnet-only: devnet SOL has no real-world value. Mainnet is deliberately out of scope pending a separate audit, legal review, and multisig authority setup.
 
+## How TxLINE powers the backend
+
+- Provides real fixtures and kickoff times for new pools.
+- Streams live scores to update the Telegram leaderboard.
+- Reconnects from the last event if the score stream drops.
+- Provides a final-score proof for both teams' full-game goals.
+- Lets the Solana program verify the proof before settlement, so the backend cannot choose the final score.
+
+## TxLINE API feedback
+
+- **What we liked**
+  - One API provides fixtures, live scores, and an on-chain proof.
+  - Settlement does not rely on trusting our backend.
+- **Where we hit friction**
+  - Expiring guest tokens required retry and renewal logic.
+  - Participant scores had to be mapped to home and away teams.
+  - A proven score still needs a final-match event before settlement.
+
 ## Public HTTP surface
 
 - `GET /health` — process liveness
